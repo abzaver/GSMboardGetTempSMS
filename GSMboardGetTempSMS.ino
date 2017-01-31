@@ -139,7 +139,7 @@ void loop()
       "K" 300 100 100 100 300 100 100 100 100 100 100 100
            ^   ^   ^   ^   ^   ^   ^   ^   ^   ^   ^   ^ 
            S   P   S   P   S   P   P   P   P   P   P   P
-      /*
+      */
     }
     
     //Работа с датчиком температуры и влажности
@@ -151,6 +151,7 @@ void loop()
       #endif
     }    
     
+    // Принимаем СМС разбираем и исполняем команды
     if (!gprsSerial.available())
         return;
  
@@ -162,13 +163,13 @@ void loop()
         if (isStringMessage) {
             //если текущая строка - SMS-сообщение,
             //отреагируем на него соответствующим образом
-            if (!currStr.compareTo("Light on")) {
+            if (currStr.equalsIgnoreCase("Light on")) {
                 digitalWrite(lightPin, HIGH);
                 sendTextMessage(senderNumber,"Light is on");
-            } else if (!currStr.compareTo("Light off")) {
+            } else if (currStr.equalsIgnoreCase("Light off")) {
                 digitalWrite(lightPin, LOW);
                 sendTextMessage(senderNumber,"Light is off");
-            } else if (!currStr.compareTo("Get temp")) {
+            } else if (currStr.equalsIgnoreCase("Get temp")) {
                 char strTemp[6];
                 char strMessage[15];
                 /* 4 is mininum width, 2 is precision; float value is copied onto str_temp*/
