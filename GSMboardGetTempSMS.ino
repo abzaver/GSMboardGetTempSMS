@@ -7,7 +7,7 @@ timeouter waitDefaultTimeout;   //Таймаут для общей ошибки 
 timeouter waitIntercharTimeout; //Таймаут для передачи символа
 timeouter waitTempSensorUpdate; //Таймаут для обновления температурных датчиков
 timeouter waitNetworkTimeUpdate;//Таймаут для обновления сетевого времени
-timeouter waitMorseTimeout;     //Таймаут для азбуки морзе
+timeouter waitBlinkTimeout;     //Таймаут для моргания светодиодом
 
 //#define DEBUG 1
 //#define SHOW_OW_TEMP 1
@@ -106,11 +106,20 @@ void setup()
       error = 6;
       return;
     }
+
+    waitBlinkTimeout.setDelay(2000);
+    waitBlinkTimeout.start();
 }
  
 String currStr = "";
 // Переменная принимает значение True, если текущая строка является сообщением
 boolean isStringMessage = false;
+// Переменная принимает значение True, если текущая строка является ответом USSD
+boolean isStringUSSDreply = false;
+// Статус команды включения светодиода
+boolean lightOnCmd = false;
+// Статус светодиода
+boolean lightOn = false;
 // Номер абонента для отправки СМС, по умолчанию
 char *senderNumber ="+79263653824";
 
@@ -130,16 +139,16 @@ void loop()
       digitalWrite(13, LOW);    // turn the LED off by making the voltage LOW
       delay(blinkDelay);        // wait for a second
       return;
-    } else if (true) {
-      /*
-      waitMorseTimeout
-      "O" 300 100 300 100 300 100 100 100
-           ^   ^   ^   ^   ^   ^   ^   ^
-           S   P   S   P   S   P   P   P
-      "K" 300 100 100 100 300 100 100 100 100 100 100 100
-           ^   ^   ^   ^   ^   ^   ^   ^   ^   ^   ^   ^ 
-           S   P   S   P   S   P   P   P   P   P   P   P
-      */
+    } else if (!lightOnCmd) {
+        if (waitBlinkTimeout.isOver()) {
+          lightOn = !lightOn;
+          if (lightOn){
+            digitalWrite(13, HIGH);
+          } else {
+            digitalWrite(13, LOW);
+          }
+          waitBlinkTimeout.start();
+        }
     }
     
     //Работа с датчиком температуры и влажности
@@ -166,9 +175,11 @@ void loop()
             if (currStr.equalsIgnoreCase("Light on")) {
                 digitalWrite(lightPin, HIGH);
                 sendTextMessage(senderNumber,"Light is on");
+                lightOnCmd = true;
             } else if (currStr.equalsIgnoreCase("Light off")) {
                 digitalWrite(lightPin, LOW);
                 sendTextMessage(senderNumber,"Light is off");
+                lightOnCmd = false;
             } else if (currStr.equalsIgnoreCase("Get temp")) {
                 char strTemp[6];
                 char strMessage[15];
@@ -176,7 +187,11 @@ void loop()
                 dtostrf(sensorsOW.getTempCByIndex(0), 4, 2, strTemp);
                 snprintf(strMessage, 15, "Temp: %sC", strTemp);
                 sendTextMessage(senderNumber,strMessage);
-            }
+            } /*else if (currStr.equalsIgnoreCase("balance")) {
+                if (sendCmdWithCheck(&gprsSerial, "ATD*100#;\r", "OK\r")) {
+                  
+                }
+            }*/
             isStringMessage = false;
         } else {
             if (currStr.startsWith("+CMT")) {
