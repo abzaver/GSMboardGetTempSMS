@@ -9,7 +9,7 @@ timeouter waitSigStrengthUpdate;//Таймаут для обновления м�
 timeouter waitBalanceUpdate;    //Таймаут для обновления остатка на счете
 timeouter waitBlinkTimeout;     //Таймаут для моргания светодиодом
 
-//#define DEBUG 1
+#define DEBUG 1
 //#define SHOW_OW_TEMP 1
 
 // Include the libraries we need
