@@ -8,8 +8,9 @@ timeouter waitTempSensorUpdate; //Таймаут для обновления т�
 timeouter waitSigStrengthUpdate;//Таймаут для обновления мощности сигнала
 timeouter waitBalanceUpdate;    //Таймаут для обновления остатка на счете
 timeouter waitBlinkTimeout;     //Таймаут для моргания светодиодом
+timeouter waitWDogSIM900Tmout;  //Таймаут для Watchdog SIM900
 
-//#define DEBUG 1
+#define DEBUG 1
 //#define SHOW_OW_TEMP 1
 
 // Include the libraries we need
@@ -198,18 +199,31 @@ void setup()
     sim900_init(&gprsSerial, 19200);
     delay(500);
 
-    // Информация о состояние модуля
+    // Информация о состоянии модуля
     if (sim900_check_with_cmd("AT\r\n","OK\r\n",CMD)){
       #ifdef DEBUG
-      Serial.println("checkPowerUp OK");
+      Serial.println("checkGeneral OK");
       #endif
     } else {
       #ifdef DEBUG
-      Serial.println("checkPowerUp ERR");
+      Serial.println("checkGeneral ERR");
       #endif
       error = 1;
       return;
     }
+
+    // Информация о статусе модуля
+    if (sim900_check_with_cmd("AT+CPAS\r\n","+CPAS: 0\r\n",CMD)){
+      #ifdef DEBUG
+      Serial.println("checkPAS OK");
+      #endif
+    } else {
+      #ifdef DEBUG
+      Serial.println("checkPAS ERR");
+      #endif
+      error = 2;
+      return;
+    }    
     
     // Настраиваем приём сообщений с других устройств
     // Проверяем их на правильность выполнения
@@ -223,7 +237,7 @@ void setup()
       #ifdef DEBUG
       Serial.println("GSMBUSY ERR");
       #endif
-      error = 2;
+      error = 3;
       return;
     }
     // Текстовый режим
@@ -235,7 +249,7 @@ void setup()
       #ifdef DEBUG
       Serial.println("CMGF ERR");
       #endif
-      error = 3;
+      error = 4;
       return;
     }
     // Контроль передачи данных
@@ -247,7 +261,7 @@ void setup()
       #ifdef DEBUG
       Serial.println("IFC ERR");
       #endif
-      error = 4;
+      error = 5;
       return;
     }
     if (sim900_check_with_cmd("AT+CPBS=\"SM\"\r", "OK\r", CMD)){
@@ -258,7 +272,7 @@ void setup()
       #ifdef DEBUG
       Serial.println("CPBS=\"SM\" ERR");
       #endif
-      error = 5;
+      error = 6;
       return;
     }
     //Обработка СМС в реальном времени
@@ -270,7 +284,7 @@ void setup()
       #ifdef DEBUG
       Serial.println("CNMI ERR");
       #endif
-      error = 6;
+      error = 7;
       return;
     }
 
@@ -284,7 +298,10 @@ void setup()
     waitSigStrengthUpdate.start();
 
     waitBalanceUpdate.setDelay(300000); //5 минут
-    waitBalanceUpdate.start();    
+    waitBalanceUpdate.start();
+
+    waitWDogSIM900Tmout.setDelay(60000); //1 минута
+    waitWDogSIM900Tmout.start();
 }
  
 String currStr = "";
@@ -340,6 +357,18 @@ void loop()
       waitSigStrengthUpdate.start();
     }
     */
+
+    // Раз в минуту проверяем состояние GSM модуля
+    #ifdef DEBUG
+    if (waitWDogSIM900Tmout.isOver()) {
+      if (sim900_check_with_cmd("AT+CPAS\r\n","+CPAS: 0\r\n",CMD)){
+        Serial.println("checkPAS OK");
+      } else {
+        Serial.println("checkPAS ERR");
+      }
+      waitWDogSIM900Tmout.start();
+    }
+    #endif
     
     // Раз в 5 минут запрашиваем баланс через USSD
     #ifdef DEBUG
@@ -389,7 +418,7 @@ void loop()
                 digitalWrite(lightPin, LOW);
                 sendSMS(senderNumber, "Light is off");
                 lightOnCmd = false;
-            } else if (currStr.equalsIgnoreCase("Get temp")) {
+            } else if (currStr.equalsIgnoreCase("get temp") || currStr.equalsIgnoreCase("gt")) {
                 char strTemp[6];
                 char strMessage[15];
                 // 4 is mininum width, 2 is precision; float value is copied onto str_temp
@@ -400,7 +429,7 @@ void loop()
                 */
                 snprintf(strMessage, 15, "Temp: %sC", strTemp);
                 sendSMS(senderNumber, strMessage);
-            } else if (currStr.equalsIgnoreCase("balance")) {
+            } else if (currStr.equalsIgnoreCase("balance") || currStr.equalsIgnoreCase("bl")) {
                 char strResponse[50];
                 if (sendUSSDSynchronous("*100#", strResponse)) {
                   sendSMS(senderNumber, getSubString(strResponse, 0, strcspn(strResponse, "\r\n")));
