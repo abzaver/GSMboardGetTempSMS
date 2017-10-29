@@ -10,12 +10,14 @@ timeouter waitBalanceUpdate;    //Таймаут для обновления о�
 timeouter waitBlinkTimeout;     //Таймаут для моргания светодиодом
 timeouter waitWDogSIM900Tmout;  //Таймаут для Watchdog SIM900
 
-#define DEBUG 1
+//#define DEBUG 1
 //#define SHOW_OW_TEMP 1
 
 // Include the libraries we need
 #include <OneWire.h>
 #include <DallasTemperature.h>
+
+#include <EEPROM.h>
 
 // Data wire is plugged into port 2 on the Arduino
 #define ONE_WIRE_BUS 2
@@ -176,8 +178,13 @@ char *extractFromString (char *src_str, char *beg_str, char *end_str)  {
    }
 }
 
+// Значение пороговой температуры
+int warningTemp = 10;
+bool warningSended = false;
+
 void setup()
 {
+   
     pinMode(lightPin, OUTPUT);
     // Start up the DallasTemperature library
     sensorsOW.begin();
@@ -185,6 +192,13 @@ void setup()
     #ifdef DEBUG
     Serial.begin(9600);
     Serial.println("Start"); 
+    #endif
+
+    // Читаем сохраненное значение проговой температуры
+    EEPROM.get(0, warningTemp);
+    #ifdef DEBUG
+    Serial.print("warningTemp: ");
+    Serial.println(warningTemp);
     #endif
 
     // задержка на
@@ -395,6 +409,41 @@ void loop()
         #ifdef SHOW_OW_TEMP
         Serial.println(sensorsOW.getTempCByIndex(0));
         #endif
+        if (sensorsOW.getTempCByIndex(0) < warningTemp) {
+          if (!warningSended) {
+            char strTemp[6];
+            char strMessage[50];
+            // 4 is mininum width, 2 is precision; float value is copied onto str_temp
+            dtostrf(sensorsOW.getTempCByIndex(0), 4, 2, strTemp);
+            /*
+            snprintf здесь урезанная, и не умеет работать с double
+            поэтому используем dtostrf
+            */
+            snprintf(strMessage, 50, "!!!Warning!!! \nTemp is: %sC", strTemp);
+            #ifdef DEBUG
+            Serial.println(strMessage);
+            #endif
+            sendSMS(senderNumber, strMessage);
+            warningSended = true;
+          }
+        } else {
+          if (warningSended) {
+            char strTemp[6];
+            char strMessage[15];
+            // 4 is mininum width, 2 is precision; float value is copied onto str_temp
+            dtostrf(sensorsOW.getTempCByIndex(0), 4, 2, strTemp);
+            /*
+            snprintf здесь урезанная, и не умеет работать с double
+            поэтому используем dtostrf
+            */
+            snprintf(strMessage, 15, "Temp is: %sC", strTemp);
+            #ifdef DEBUG 
+            Serial.println(strMessage);
+            #endif
+            sendSMS(senderNumber, strMessage);
+            warningSended = false;
+          }
+        }
       }
     }    
     
@@ -420,15 +469,26 @@ void loop()
                 lightOnCmd = false;
             } else if (currStr.equalsIgnoreCase("get temp") || currStr.equalsIgnoreCase("gt")) {
                 char strTemp[6];
-                char strMessage[15];
+                char strMessage[160];
                 // 4 is mininum width, 2 is precision; float value is copied onto str_temp
                 dtostrf(sensorsOW.getTempCByIndex(0), 4, 2, strTemp);
                 /*
                 snprintf здесь урезанная, и не умеет работать с double
                 поэтому используем dtostrf
                 */
-                snprintf(strMessage, 15, "Temp: %sC", strTemp);
+                snprintf(strMessage, 160, "Temp: %sC \nWarning Temp: %dC", strTemp, warningTemp);
                 sendSMS(senderNumber, strMessage);
+
+            } else if (currStr.startsWith("set temp")) {
+                char command[20];
+                currStr.toCharArray(command, 20);
+                sscanf(command, "set temp %d", &warningTemp);
+                // Сохраняем значение проговой температуры
+                EEPROM.put(0, warningTemp);
+                #ifdef DEBUG
+                Serial.print("warningTemp: ");
+                Serial.println(warningTemp);
+                #endif
             } else if (currStr.equalsIgnoreCase("balance") || currStr.equalsIgnoreCase("bl")) {
                 char strResponse[50];
                 if (sendUSSDSynchronous("*100#", strResponse)) {
