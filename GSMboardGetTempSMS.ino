@@ -31,6 +31,9 @@ DallasTemperature sensorsOW(&oneWire);
 //для светодиода будем использовать 13 цифровой вход,
 int lightPin = 13;
 
+//для регистрации отказов
+int alarmPin = 11;
+
 int error = 0; //номер ошибки
 int errBlinkCnt = 0;
 
@@ -184,7 +187,8 @@ bool warningSended = false;
 
 void setup()
 {
-   
+    pinMode(alarmPin, INPUT_PULLUP);
+    
     pinMode(lightPin, OUTPUT);
     // Start up the DallasTemperature library
     sensorsOW.begin();
@@ -210,7 +214,7 @@ void setup()
       delay(500);
       i++;
     }
-    sim900_init(&gprsSerial, 19200);
+    sim900_init(&gprsSerial, 9600);
     delay(500);
 
     // Информация о состоянии модуля
@@ -325,6 +329,9 @@ boolean isStringMessage = false;
 boolean lightOnCmd = false;
 // Статус светодиода
 boolean lightOn = false;
+// Статус тревоги
+boolean alarm = false;
+int alarmSensorVal = HIGH;
 // Номер абонента для отправки СМС, по умолчанию
 char *senderNumber ="+79263653824";
 // Переменная со значением силы сигнала
@@ -398,6 +405,29 @@ void loop()
     }
     #endif
         
+    //Работа с тревогой
+    int tempSensorVal = digitalRead(alarmPin);
+    if (tempSensorVal != alarmSensorVal) {
+      #ifdef DEBUG
+      Serial.println(tempSensorVal);
+      #endif
+      alarmSensorVal = tempSensorVal;
+
+      if (alarmSensorVal == LOW) { 
+        alarm = true;
+        sendSMS(senderNumber, "boiler is failure!");
+        #ifdef DEBUG
+        Serial.println("alarm!!!");
+        #endif
+      } else {
+        alarm = false;
+        sendSMS(senderNumber, "boiler is operational");
+        #ifdef DEBUG
+        Serial.println("all OK");
+        #endif
+      }
+    }
+    
     //Работа с датчиком температуры
     if (waitTempSensorUpdate.isOver()) {
       waitTempSensorUpdate.start();
