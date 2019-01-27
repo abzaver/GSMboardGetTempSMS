@@ -187,7 +187,7 @@ bool warningSended = false;
 
 void setup()
 {
-    pinMode(alarmPin, INPUT_PULLUP);
+    pinMode(alarmPin, INPUT);
     
     pinMode(lightPin, OUTPUT);
     // Start up the DallasTemperature library
@@ -331,7 +331,7 @@ boolean lightOnCmd = false;
 boolean lightOn = false;
 // Статус тревоги
 boolean alarm = false;
-int alarmSensorVal = HIGH;
+int alarmSensorVal = LOW;
 // Номер абонента для отправки СМС, по умолчанию
 char *senderNumber ="+79263653824";
 // Переменная со значением силы сигнала
@@ -406,14 +406,14 @@ void loop()
     #endif
         
     //Работа с тревогой
+    /*
     int tempSensorVal = digitalRead(alarmPin);
     if (tempSensorVal != alarmSensorVal) {
       #ifdef DEBUG
       Serial.println(tempSensorVal);
       #endif
-      alarmSensorVal = tempSensorVal;
 
-      if (alarmSensorVal == LOW) { 
+      if (alarmSensorVal == HIGH) { 
         alarm = true;
         sendSMS(senderNumber, "boiler is failure!");
         #ifdef DEBUG
@@ -427,6 +427,8 @@ void loop()
         #endif
       }
     }
+    alarmSensorVal = tempSensorVal;
+    */
     
     //Работа с датчиком температуры
     if (waitTempSensorUpdate.isOver()) {
