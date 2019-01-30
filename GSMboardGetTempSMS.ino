@@ -1,3 +1,9 @@
+/*
+SMS
++CMT: "+79263653824","","12/12/12,00:00:00+3"
+set temp 12
+*/
+
 #include "sim900.h"
 SoftwareSerial gprsSerial(7, 8);// RX, TX
 
@@ -12,6 +18,7 @@ timeouter waitWDogSIM900Tmout;  //Таймаут для Watchdog SIM900
 
 //#define DEBUG 1
 //#define SHOW_OW_TEMP 1
+//#define WITHOUT_SIM900 1
 
 // Include the libraries we need
 #include <OneWire.h>
@@ -41,17 +48,23 @@ int errBlinkCnt = 0;
  * Функция отправки SMS-сообщения
  */
 bool sendSMS(char *number, char *data){
+  #ifdef WITHOUT_SIM900
+  Serial.println("-------startSMS-------");
+  Serial.println(data);
+  Serial.println("--------endSMS--------");
+  #else
   sim900_flush_serial();
   sim900_send_cmd("AT+CMGS=\"");
   sim900_send_cmd(number);
   if(!sim900_check_with_cmd("\"\r\n",">",CMD)) {
         return false;
     }
-    delay(100);
-    sim900_send_cmd(data);
-    delay(100);
-    sim900_send_End_Mark();
-    return sim900_wait_for_resp("OK\r\n", CMD);
+  delay(100);
+  sim900_send_cmd(data);
+  delay(100);
+  sim900_send_End_Mark();
+  return sim900_wait_for_resp("OK\r\n", CMD);
+  #endif
 }
 
 /*
@@ -181,8 +194,11 @@ char *extractFromString (char *src_str, char *beg_str, char *end_str)  {
    }
 }
 
+// Значение текущей температуры
+float currentTemperature = DEVICE_DISCONNECTED_C;
 // Значение пороговой температуры
-int warningTemp = 10;
+int warningTemp = 12;
+float hysteresis = 0.5;
 bool warningSended = false;
 
 void setup()
@@ -195,14 +211,23 @@ void setup()
     
     #ifdef DEBUG
     Serial.begin(9600);
+    Serial.print("DEBUG: ");
     Serial.println("Start"); 
     #endif
 
     // Читаем сохраненное значение проговой температуры
     EEPROM.get(0, warningTemp);
+    //EEPROM.get(sizeof(int), hysteresis);
+    
     #ifdef DEBUG
+    //warningTemp = 30;
+    Serial.print("DEBUG: ");
     Serial.print("warningTemp: ");
     Serial.println(warningTemp);
+    //hysteresis = 0.5;
+    Serial.print("DEBUG: ");
+    Serial.print("hysteresis: ");
+    Serial.println(hysteresis);    
     #endif
 
     // задержка на
@@ -220,10 +245,12 @@ void setup()
     // Информация о состоянии модуля
     if (sim900_check_with_cmd("AT\r\n","OK\r\n",CMD)){
       #ifdef DEBUG
+      Serial.print("DEBUG: ");
       Serial.println("checkGeneral OK");
       #endif
     } else {
       #ifdef DEBUG
+      Serial.print("DEBUG: ");
       Serial.println("checkGeneral ERR");
       #endif
       error = 1;
@@ -233,10 +260,12 @@ void setup()
     // Информация о статусе модуля
     if (sim900_check_with_cmd("AT+CPAS\r\n","+CPAS: 0\r\n",CMD)){
       #ifdef DEBUG
+      Serial.print("DEBUG: ");
       Serial.println("checkPAS OK");
       #endif
     } else {
       #ifdef DEBUG
+      Serial.print("DEBUG: ");
       Serial.println("checkPAS ERR");
       #endif
       error = 2;
@@ -249,10 +278,12 @@ void setup()
     // Запрет входящих звонков
     if (sim900_check_with_cmd("AT+GSMBUSY=1\r", "OK\r", CMD)){
       #ifdef DEBUG
+      Serial.print("DEBUG: ");
       Serial.println("GSMBUSY OK");
       #endif
     } else {
       #ifdef DEBUG
+      Serial.print("DEBUG: ");
       Serial.println("GSMBUSY ERR");
       #endif
       error = 3;
@@ -261,10 +292,12 @@ void setup()
     // Текстовый режим
     if (sim900_check_with_cmd("AT+CMGF=1\r", "OK\r", CMD)){
       #ifdef DEBUG
+      Serial.print("DEBUG: ");
       Serial.println("CMGF OK");
       #endif
     } else {
       #ifdef DEBUG
+      Serial.print("DEBUG: ");
       Serial.println("CMGF ERR");
       #endif
       error = 4;
@@ -273,10 +306,12 @@ void setup()
     // Контроль передачи данных
     if (sim900_check_with_cmd("AT+IFC=1, 1\r", "OK\r", CMD)){
       #ifdef DEBUG
+      Serial.print("DEBUG: ");
       Serial.println("IFC OK");
       #endif
     } else {
       #ifdef DEBUG
+      Serial.print("DEBUG: ");
       Serial.println("IFC ERR");
       #endif
       error = 5;
@@ -284,10 +319,12 @@ void setup()
     }
     if (sim900_check_with_cmd("AT+CPBS=\"SM\"\r", "OK\r", CMD)){
       #ifdef DEBUG
+      Serial.print("DEBUG: ");
       Serial.println("CPBS=\"SM\" OK");
       #endif
     } else {
       #ifdef DEBUG
+      Serial.print("DEBUG: ");
       Serial.println("CPBS=\"SM\" ERR");
       #endif
       error = 6;
@@ -296,10 +333,12 @@ void setup()
     //Обработка СМС в реальном времени
     if (sim900_check_with_cmd("AT+CNMI=1,2,2,1,0\r", "OK\r", CMD)){
       #ifdef DEBUG
+      Serial.print("DEBUG: ");
       Serial.println("CNMI OK");
       #endif
     } else {
       #ifdef DEBUG
+      Serial.print("DEBUG: ");
       Serial.println("CNMI ERR");
       #endif
       error = 7;
@@ -309,7 +348,7 @@ void setup()
     waitBlinkTimeout.setDelay(2000);
     waitBlinkTimeout.start();
 
-    waitTempSensorUpdate.setDelay(2000);
+    waitTempSensorUpdate.setDelay(5000);
     waitTempSensorUpdate.start();
 
     waitSigStrengthUpdate.setDelay(5000);
@@ -340,6 +379,9 @@ int signalStrength = 0;
 void loop()
 {
     
+    #ifdef WITHOUT_SIM900
+    error = 0;
+    #endif
     // Выводим код ошибки на светодиод
     if (error){
       int blinkDelay = 500;
@@ -381,6 +423,7 @@ void loop()
 
     // Раз в минуту проверяем состояние GSM модуля
     #ifdef DEBUG
+    /*
     if (waitWDogSIM900Tmout.isOver()) {
       if (sim900_check_with_cmd("AT+CPAS\r\n","+CPAS: 0\r\n",CMD)){
         Serial.println("checkPAS OK");
@@ -389,10 +432,12 @@ void loop()
       }
       waitWDogSIM900Tmout.start();
     }
+    */
     #endif
     
     // Раз в 5 минут запрашиваем баланс через USSD
     #ifdef DEBUG
+    /*
     if (waitBalanceUpdate.isOver()) {
       char strResponse[50];
       if (sendUSSDSynchronous("*100#", strResponse)) {
@@ -403,6 +448,7 @@ void loop()
       }
       waitBalanceUpdate.start();
     }
+    */
     #endif
         
     //Работа с тревогой
@@ -432,60 +478,73 @@ void loop()
     
     //Работа с датчиком температуры
     if (waitTempSensorUpdate.isOver()) {
-      waitTempSensorUpdate.start();
       sensorsOW.requestTemperatures();
-      if (sensorsOW.getTempCByIndex(0) == DEVICE_DISCONNECTED_C) {
+      currentTemperature = sensorsOW.getTempCByIndex(0);
+      if (currentTemperature == DEVICE_DISCONNECTED_C) {
         Serial.print("DEVICE DISCONNECTED");
         error = 7;
       } else {
         #ifdef SHOW_OW_TEMP
-        Serial.println(sensorsOW.getTempCByIndex(0));
+        Serial.println(currentTemperature);
         #endif
-        if (sensorsOW.getTempCByIndex(0) < warningTemp) {
+        if (currentTemperature < warningTemp) {
           if (!warningSended) {
             char strTemp[6];
             char strMessage[50];
             // 4 is mininum width, 2 is precision; float value is copied onto str_temp
-            dtostrf(sensorsOW.getTempCByIndex(0), 4, 2, strTemp);
+            dtostrf(currentTemperature, 4, 2, strTemp);
             /*
             snprintf здесь урезанная, и не умеет работать с double
             поэтому используем dtostrf
             */
-            snprintf(strMessage, 50, "!!!Warning!!! \nTemp is: %sC", strTemp);
-            #ifdef DEBUG
+            snprintf(strMessage, 50, "!!!WARNING!!!\ntemp is: %sC", strTemp);
+            #if defined(DEBUG) && !defined(WITHOUT_SIM900)
+            Serial.println("-------startDBG-------");
             Serial.println(strMessage);
+            Serial.println("--------endDBG--------");
             #endif
             sendSMS(senderNumber, strMessage);
             warningSended = true;
           }
         } else {
-          if (warningSended) {
+          if (warningSended && currentTemperature > (warningTemp + hysteresis)) {
             char strTemp[6];
-            char strMessage[15];
+            char strMessage[25];
             // 4 is mininum width, 2 is precision; float value is copied onto str_temp
-            dtostrf(sensorsOW.getTempCByIndex(0), 4, 2, strTemp);
+            dtostrf(currentTemperature, 4, 2, strTemp);
             /*
             snprintf здесь урезанная, и не умеет работать с double
             поэтому используем dtostrf
             */
-            snprintf(strMessage, 15, "Temp is: %sC", strTemp);
-            #ifdef DEBUG 
+            snprintf(strMessage, 25, "temp is normal: %sC", strTemp);
+            #if defined(DEBUG) && !defined(WITHOUT_SIM900)
+            Serial.println("-------startDBG-------");
             Serial.println(strMessage);
+            Serial.println("--------endDBG--------");            
             #endif
             sendSMS(senderNumber, strMessage);
             warningSended = false;
           }
         }
       }
+      waitTempSensorUpdate.start();
     }    
     
     // Принимаем СМС разбираем и исполняем команды
+    #ifdef WITHOUT_SIM900
+    if (!Serial.available())
+        return;
+ 
+    char currSymb = Serial.read();
+    #else
     if (!gprsSerial.available())
         return;
  
-    char currSymb = gprsSerial.read();    
+    char currSymb = gprsSerial.read();
+    #endif
     if ('\r' == currSymb) {
         #ifdef DEBUG 
+        Serial.print("DEBUG: ");
         Serial.println(currStr);
         #endif
         if (isStringMessage) {
@@ -501,14 +560,17 @@ void loop()
                 lightOnCmd = false;
             } else if (currStr.equalsIgnoreCase("get temp") || currStr.equalsIgnoreCase("gt")) {
                 char strTemp[6];
+                char strWarnTemp[6];
                 char strMessage[160];
+                
                 // 4 is mininum width, 2 is precision; float value is copied onto str_temp
-                dtostrf(sensorsOW.getTempCByIndex(0), 4, 2, strTemp);
+                dtostrf(currentTemperature, 4, 2, strTemp);
+                dtostrf(warningTemp, 4, 2, strWarnTemp);
                 /*
                 snprintf здесь урезанная, и не умеет работать с double
                 поэтому используем dtostrf
                 */
-                snprintf(strMessage, 160, "Temp: %sC \nWarning Temp: %dC", strTemp, warningTemp);
+                snprintf(strMessage, 160, "CURR temp: %sC\nWARN temp: %sC", strTemp, strWarnTemp);
                 sendSMS(senderNumber, strMessage);
 
             } else if (currStr.startsWith("set temp")) {
@@ -518,9 +580,23 @@ void loop()
                 // Сохраняем значение проговой температуры
                 EEPROM.put(0, warningTemp);
                 #ifdef DEBUG
+                Serial.print("DEBUG: ");
                 Serial.print("warningTemp: ");
                 Serial.println(warningTemp);
                 #endif
+            } else if (currStr.startsWith("set hyst")) {
+                // sscanf не работает с float
+                /*
+                char command[20];
+                currStr.toCharArray(command, 20);
+                sscanf(command, "set hyst %d", &hysteresis);
+                // Сохраняем значение проговой температуры
+                EEPROM.put(0, warningTemp);
+                #ifdef DEBUG
+                Serial.print("warningTemp: ");
+                Serial.println(warningTemp);
+                #endif
+                */
             } else if (currStr.equalsIgnoreCase("balance") || currStr.equalsIgnoreCase("bl")) {
                 char strResponse[50];
                 if (sendUSSDSynchronous("*100#", strResponse)) {
@@ -536,6 +612,7 @@ void loop()
                 //экстрагируем номер отправителя
                 currStr.substring(7,19).toCharArray(senderNumber, 13);
                 #ifdef DEBUG
+                Serial.print("DEBUG: ");
                 Serial.println(senderNumber);
                 #endif
             }
