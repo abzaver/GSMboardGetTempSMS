@@ -3,22 +3,64 @@ SMS
 +CMT: "+79263653824","","12/12/12,00:00:00+3"
 set temp 12
 */
-
-#include "sim900.h"
-SoftwareSerial gprsSerial(7, 8);// RX, TX
-
-#include <timeouter.h>
-timeouter waitDefaultTimeout;   //Таймаут для общей ошибки serial
-timeouter waitIntercharTimeout; //Таймаут для передачи символа
-timeouter waitTempSensorUpdate; //Таймаут для обновления температурных датчиков
-timeouter waitSigStrengthUpdate;//Таймаут для обновления мощности сигнала
-timeouter waitBalanceUpdate;    //Таймаут для обновления остатка на счете
-timeouter waitBlinkTimeout;     //Таймаут для моргания светодиодом
-timeouter waitWDogSIM900Tmout;  //Таймаут для Watchdog SIM900
-
-//#define DEBUG 1
+//#define DEBUG          1
 //#define SHOW_OW_TEMP 1
 //#define WITHOUT_SIM900 1
+#define WITHOUT_LCD    1
+
+#include <avr/wdt.h>
+
+#include <timeouter.h>
+timeouter waitDefaultTimeout;     //Таймаут для общей ошибки serial
+timeouter waitIntercharTimeout;   //Таймаут для передачи символа
+timeouter waitTempSensorUpdate;   //Таймаут для обновления температурных датчиков
+timeouter waitSigStrengthUpdate;  //Таймаут для обновления мощности сигнала
+timeouter waitBalanceUpdate;      //Таймаут для обновления остатка на счете
+timeouter waitBlinkTimeout;       //Таймаут для моргания светодиодом
+timeouter waitWDogSIM900Tmout;    //Таймаут для Watchdog SIM900
+timeouter waitForRebootTimeout;   //Таймаут для перезагрузки устройства
+timeouter waitHeartbeatTimeout;   //Таймаут для автоматического оповещения
+
+// Define pins
+#define PIN_BUTTON       A2 //pin where locate PushButton
+#define PIN_ONE_WIRE_BUS  2 //Data wire is plugged into port 2 on the Arduino
+#define PIN_LIGHT        13 //signal LED
+#define PIN_FAILURE       5 //for failure registration
+#define PIN_GSM_RX        7 //pin for GSM receive Software Serial
+#define PIN_GSM_TX        8 //pin for GSM transmit Software Serial
+
+#ifdef WITHOUT_LCD
+
+#else
+#define PIN_LCD_LIGHT     3 //LCD backlight
+#define PIN_LCD_SCK      13 //yellow wire
+#define PIN_LCD_MOSI     11 //green wire
+#define PIN_LCD_DC       10 //orange wire
+#define PIN_LCD_RST      12 //red wire
+#define PIN_LCD_CS        6 //brown wire
+#endif //WITHOUT_LCD
+
+#ifndef WITHOUT_SIM900
+#include "sim900.h"
+SoftwareSerial gprsSerial(PIN_GSM_RX, PIN_GSM_TX);// RX, TX
+#endif //WITHOUT_SIM900
+
+#ifndef WITHOUT_LCD
+timeouter waitDisplayUpdateTmout; //Таймаут для обновления дисплея
+
+#include <LCD5110_Basic.h>
+LCD5110 LCD(PIN_LCD_SCK, PIN_LCD_MOSI, PIN_LCD_DC, PIN_LCD_RST, PIN_LCD_CS);
+
+extern uint8_t SmallFont[];
+extern uint8_t MediumNumbers[];
+//extern uint8_t BigNumbers[];
+
+bool lcdInverse = false;
+#endif //WITHOUT_LCD
+
+//Push Button on PIN_BUTTON
+bool     button_state = false;
+uint32_t ms_button    = 0;
 
 // Include the libraries we need
 #include <OneWire.h>
@@ -26,23 +68,15 @@ timeouter waitWDogSIM900Tmout;  //Таймаут для Watchdog SIM900
 
 #include <EEPROM.h>
 
-// Data wire is plugged into port 2 on the Arduino
-#define ONE_WIRE_BUS 2
-
 // Setup a oneWire instance to communicate with any OneWire devices (not just Maxim/Dallas temperature ICs)
-OneWire oneWire(ONE_WIRE_BUS);
+OneWire oneWire(PIN_ONE_WIRE_BUS);
 
 // Pass our oneWire reference to Dallas Temperature. 
 DallasTemperature sensorsOW(&oneWire);
 
-//для светодиода будем использовать 13 цифровой вход,
-int lightPin = 13;
-
-//для регистрации отказов
-int alarmPin = 11;
-
-int error = 0; //номер ошибки
-int errBlinkCnt = 0;
+//error handling
+int error       = 0; //error number
+int errBlinkCnt = 0; //display error number by LED blinks
 
 /*
  * Функция отправки SMS-сообщения
@@ -52,6 +86,7 @@ bool sendSMS(char *number, char *data){
   Serial.println("-------startSMS-------");
   Serial.println(data);
   Serial.println("--------endSMS--------");
+  return true;
   #else
   sim900_flush_serial();
   sim900_send_cmd("AT+CMGS=\"");
@@ -64,13 +99,19 @@ bool sendSMS(char *number, char *data){
   delay(100);
   sim900_send_End_Mark();
   return sim900_wait_for_resp("OK\r\n", CMD);
-  #endif
+  #endif //WITHOUT_SIM900
 }
 
 /*
  * Функция отправки USSD-запроса
  */
 bool sendUSSDSynchronous(char *ussdCommand, char *response){
+  #ifdef WITHOUT_SIM900
+  Serial.println("-------sendUSSD-------");
+  Serial.println(ussdCommand);
+  Serial.println("--------endUSSD--------");
+  return true;
+  #else
   //AT+CUSD=1,"{command}"
   //OK
   //
@@ -111,12 +152,16 @@ bool sendUSSDSynchronous(char *ussdCommand, char *response){
     return true;
   }
   return false;
+  #endif //WITHOUT_SIM900
 }
 
 /*
  * Функция получения уровня сигнала в сети
  */
 short int gsmNetStatus(){
+  #ifdef WITHOUT_SIM900
+  return -53;
+  #else  
   byte i = 0;
   char *p,*s;
   char tempchar[7]; // временная переменная 
@@ -149,6 +194,7 @@ short int gsmNetStatus(){
     }
   }
   return 0;
+  #endif //WITHOUT_SIM900
 }
 
 /*
@@ -197,15 +243,23 @@ char *extractFromString (char *src_str, char *beg_str, char *end_str)  {
 // Значение текущей температуры
 float currentTemperature = DEVICE_DISCONNECTED_C;
 // Значение пороговой температуры
-int warningTemp = 12;
-float hysteresis = 0.5;
-bool warningSended = false;
+int   warningTemp   = 12;
+float hysteresis    = 0.5;
+bool  warningSended = false;
 
 void setup()
 {
-    pinMode(alarmPin, INPUT);
+    #ifndef WITHOUT_LCD
+    LCD.InitLCD();
+    #endif
+
+    pinMode(PIN_FAILURE,   INPUT);
+    pinMode(PIN_LIGHT,     OUTPUT);
+    #ifndef WITHOUT_LCD
+    pinMode(PIN_LCD_LIGHT, OUTPUT);
+    #endif
+    pinMode(PIN_BUTTON,    INPUT_PULLUP);
     
-    pinMode(lightPin, OUTPUT);
     // Start up the DallasTemperature library
     sensorsOW.begin();
     
@@ -233,13 +287,15 @@ void setup()
     // задержка на
     int i = 0;
     while(i < 10){ // 10 секунд
-      digitalWrite(lightPin, HIGH);
+      digitalWrite(PIN_LIGHT, HIGH);
       delay(500);
-      digitalWrite(lightPin, LOW);
+      digitalWrite(PIN_LIGHT, LOW);
       delay(500);
       i++;
     }
-    sim900_init(&gprsSerial, 9600);
+    
+	  #ifndef WITHOUT_SIM900
+	  sim900_init(&gprsSerial, 9600);
     delay(500);
 
     // Информация о состоянии модуля
@@ -344,6 +400,11 @@ void setup()
       error = 7;
       return;
     }
+    #endif //WITHOUT_SIM900
+	
+	#ifdef WITHOUT_SIM900
+    error = 0;
+    #endif //WITHOUT_SIM900
 
     waitBlinkTimeout.setDelay(2000);
     waitBlinkTimeout.start();
@@ -359,6 +420,22 @@ void setup()
 
     waitWDogSIM900Tmout.setDelay(60000); //1 минута
     waitWDogSIM900Tmout.start();
+
+    waitHeartbeatTimeout.setDelay(1000*3600*24); //1 сутки
+    waitHeartbeatTimeout.start();
+
+    #ifndef WITHOUT_LCD
+    waitDisplayUpdateTmout.setDelay(1000);
+    waitDisplayUpdateTmout.start();
+    #endif
+	
+  	wdt_enable (WDTO_8S); //enable watchdog
+  	#ifdef DEBUG
+  	Serial.print("DEBUG: ");
+  	Serial.println("Watchdog enabled.");
+  	#endif
+    waitForRebootTimeout.setDelay(60000); //1 минута
+    waitForRebootTimeout.start();	
 }
  
 String currStr = "";
@@ -378,10 +455,6 @@ int signalStrength = 0;
 
 void loop()
 {
-    
-    #ifdef WITHOUT_SIM900
-    error = 0;
-    #endif
     // Выводим код ошибки на светодиод
     if (error){
       int blinkDelay = 500;
@@ -390,22 +463,33 @@ void loop()
         errBlinkCnt = 0;
         blinkDelay = 2000;
       }
-      digitalWrite(lightPin, HIGH);
+      digitalWrite(PIN_LIGHT, HIGH);
       delay(500);               
-      digitalWrite(lightPin, LOW);
+      digitalWrite(PIN_LIGHT, LOW);
       delay(blinkDelay);
-      return;
+      
+	  if (waitForRebootTimeout.isOver()) {
+    #ifdef DEBUG
+    Serial.print("DEBUG: ");
+    Serial.println("rebooting device");
+    #endif
+		wdt_enable(WDTO_15MS);
+		while (1) { }
+	  }
+	  wdt_reset();
+	  return;
     } else if (!lightOnCmd) {
         if (waitBlinkTimeout.isOver()) {
           lightOn = !lightOn;
           if (lightOn){
-            digitalWrite(lightPin, HIGH);
+            digitalWrite(PIN_LIGHT, HIGH);
           } else {
-            digitalWrite(lightPin, LOW);
+            digitalWrite(PIN_LIGHT, LOW);
           }
           waitBlinkTimeout.start();
         }
     }
+	  waitForRebootTimeout.start();
 
     // Запрашиваем силу сигнала и выводим если она изменилась с прошлого раза
     /*
@@ -453,7 +537,7 @@ void loop()
         
     //Работа с тревогой
     /*
-    int tempSensorVal = digitalRead(alarmPin);
+    int tempSensorVal = digitalRead(PIN_FAILURE);
     if (tempSensorVal != alarmSensorVal) {
       #ifdef DEBUG
       Serial.println(tempSensorVal);
@@ -474,15 +558,67 @@ void loop()
       }
     }
     alarmSensorVal = tempSensorVal;
-    */
+    */ 
+
+    uint32_t ms = millis();
+    // Фиксируем нажатие кнопки
+    if( digitalRead(PIN_BUTTON) == LOW && !button_state && ( ms - ms_button ) > 50 ){
+      button_state = true;
+      ms_button    = ms;
+    }
+    // Фиксируем отпускание кнопки
+    if( digitalRead(PIN_BUTTON) == HIGH && button_state && ( ms - ms_button ) > 50  ){
+      button_state = false;     
+      ms_button    = ms;
+      if (lightOnCmd) {
+        #ifdef WITHOUT_LCD
+        digitalWrite(PIN_LIGHT, HIGH);
+        #else
+        digitalWrite(PIN_LCD_LIGHT, HIGH);
+        #endif //WITHOUT_LCD        
+      } else {
+        #ifdef WITHOUT_LCD
+        digitalWrite(PIN_LIGHT, LOW);
+        #else
+        digitalWrite(PIN_LCD_LIGHT, LOW);
+        #endif //WITHOUT_LCD 
+      }
+      lightOnCmd = !lightOnCmd;
+    }
+
+
+    #ifndef WITHOUT_LCD
+    if (waitDisplayUpdateTmout.isOver()) {
+      lcdInverse = !lcdInverse;
+      if (warningSended) {
+        LCD.invert(lcdInverse);
+      } else {
+        LCD.invert(false);
+      }
+
+      LCD.clrScr();
+      LCD.setFont(SmallFont);
+      LCD.print("current temp:", CENTER, 16);
+      LCD.setFont(MediumNumbers);
+      LCD.printNumF(currentTemperature,2,CENTER,24);
+      LCD.setFont(SmallFont);
+      LCD.print("warn temp:", LEFT, 40);
+      LCD.printNumI(warningTemp, RIGHT, 40);
+
+      waitDisplayUpdateTmout.start();
+    }
+    #endif
     
     //Работа с датчиком температуры
     if (waitTempSensorUpdate.isOver()) {
       sensorsOW.requestTemperatures();
       currentTemperature = sensorsOW.getTempCByIndex(0);
       if (currentTemperature == DEVICE_DISCONNECTED_C) {
-        Serial.print("DEVICE DISCONNECTED");
-        error = 7;
+        #ifdef DEBUG
+        Serial.print("DEBUG: ");
+        Serial.println("DEVICE DISCONNECTED");
+        #endif
+        error = 8;
       } else {
         #ifdef SHOW_OW_TEMP
         Serial.println(currentTemperature);
@@ -529,96 +665,126 @@ void loop()
       }
       waitTempSensorUpdate.start();
     }    
+
+    //Раз в сутки отправляем температуру автоматически
+    if (waitHeartbeatTimeout.isOver()) {
+      char strTemp[6];
+      char strWarnTemp[6];
+      char strMessage[160];
+      
+      // 4 is mininum width, 2 is precision; float value is copied onto str_temp
+      dtostrf(currentTemperature, 4, 2, strTemp);
+      dtostrf(warningTemp, 4, 2, strWarnTemp);
+      /*
+      snprintf здесь урезанная, и не умеет работать с double
+      поэтому используем dtostrf
+      */
+      snprintf(strMessage, 160, "CURR temp: %sC\nWARN temp: %sC", strTemp, strWarnTemp);
+      sendSMS(senderNumber, strMessage);
+      waitHeartbeatTimeout.start();
+    }                      
     
     // Принимаем СМС разбираем и исполняем команды
     #ifdef WITHOUT_SIM900
-    if (!Serial.available())
-        return;
+    if (Serial.available()){
  
-    char currSymb = Serial.read();
+      char currSymb = Serial.read();
     #else
-    if (!gprsSerial.available())
-        return;
- 
-    char currSymb = gprsSerial.read();
+    if (gprsSerial.available()){
+   
+      char currSymb = gprsSerial.read();
     #endif
-    if ('\r' == currSymb) {
-        #ifdef DEBUG 
-        Serial.print("DEBUG: ");
-        Serial.println(currStr);
-        #endif
-        if (isStringMessage) {
-            //если текущая строка - SMS-сообщение,
-            //отреагируем на него соответствующим образом
-            if (currStr.equalsIgnoreCase("Light on")) {
-                digitalWrite(lightPin, HIGH);
-                sendSMS(senderNumber, "Light is on");
-                lightOnCmd = true;
-            } else if (currStr.equalsIgnoreCase("Light off")) {
-                digitalWrite(lightPin, LOW);
-                sendSMS(senderNumber, "Light is off");
-                lightOnCmd = false;
-            } else if (currStr.equalsIgnoreCase("get temp") || currStr.equalsIgnoreCase("gt")) {
-                char strTemp[6];
-                char strWarnTemp[6];
-                char strMessage[160];
-                
-                // 4 is mininum width, 2 is precision; float value is copied onto str_temp
-                dtostrf(currentTemperature, 4, 2, strTemp);
-                dtostrf(warningTemp, 4, 2, strWarnTemp);
-                /*
-                snprintf здесь урезанная, и не умеет работать с double
-                поэтому используем dtostrf
-                */
-                snprintf(strMessage, 160, "CURR temp: %sC\nWARN temp: %sC", strTemp, strWarnTemp);
-                sendSMS(senderNumber, strMessage);
-
-            } else if (currStr.startsWith("set temp")) {
-                char command[20];
-                currStr.toCharArray(command, 20);
-                sscanf(command, "set temp %d", &warningTemp);
-                // Сохраняем значение проговой температуры
-                EEPROM.put(0, warningTemp);
-                #ifdef DEBUG
-                Serial.print("DEBUG: ");
-                Serial.print("warningTemp: ");
-                Serial.println(warningTemp);
-                #endif
-            } else if (currStr.startsWith("set hyst")) {
-                // sscanf не работает с float
-                /*
-                char command[20];
-                currStr.toCharArray(command, 20);
-                sscanf(command, "set hyst %d", &hysteresis);
-                // Сохраняем значение проговой температуры
-                EEPROM.put(0, warningTemp);
-                #ifdef DEBUG
-                Serial.print("warningTemp: ");
-                Serial.println(warningTemp);
-                #endif
-                */
-            } else if (currStr.equalsIgnoreCase("balance") || currStr.equalsIgnoreCase("bl")) {
-                char strResponse[50];
-                if (sendUSSDSynchronous("*100#", strResponse)) {
-                  sendSMS(senderNumber, getSubString(strResponse, 0, strcspn(strResponse, "\r\n")));
-                }
-            }
-            isStringMessage = false;
-        } else {
-            if (currStr.startsWith("+CMT")) {
-                //если текущая строка начинается с "+CMT",
-                //то следующая строка является сообщением
-                isStringMessage = true;
-                //экстрагируем номер отправителя
-                currStr.substring(7,19).toCharArray(senderNumber, 13);
-                #ifdef DEBUG
-                Serial.print("DEBUG: ");
-                Serial.println(senderNumber);
-                #endif
-            }
-        }
-        currStr = "";
-    } else if ('\n' != currSymb) {
-        currStr += String(currSymb);
+      if ('\r' == currSymb) {
+          #ifdef DEBUG 
+          Serial.print("DEBUG: ");
+          Serial.println(currStr);
+          #endif
+          if (isStringMessage) {
+              //если текущая строка - SMS-сообщение,
+              //отреагируем на него соответствующим образом
+              if (currStr.equalsIgnoreCase("light on")) {
+                  #ifdef WITHOUT_LCD
+                  digitalWrite(PIN_LIGHT, HIGH);
+                  #else
+                  digitalWrite(PIN_LCD_LIGHT, HIGH);
+                  #endif //WITHOUT_LCD
+                  sendSMS(senderNumber, "Light is on");
+                  lightOnCmd = true;
+              } else if (currStr.equalsIgnoreCase("light off")) {
+                  #ifdef WITHOUT_LCD
+                  digitalWrite(PIN_LIGHT, LOW);
+                  #else
+                  digitalWrite(PIN_LCD_LIGHT, LOW);
+                  #endif //WITHOUT_LCD
+                  sendSMS(senderNumber, "Light is off");
+                  lightOnCmd = false;
+              } else if (currStr.equalsIgnoreCase("get temp") || currStr.equalsIgnoreCase("gt")) {
+                  char strTemp[6];
+                  char strWarnTemp[6];
+                  char strMessage[160];
+                  
+                  // 4 is mininum width, 2 is precision; float value is copied onto str_temp
+                  dtostrf(currentTemperature, 4, 2, strTemp);
+                  dtostrf(warningTemp, 4, 2, strWarnTemp);
+                  /*
+                  snprintf здесь урезанная, и не умеет работать с double
+                  поэтому используем dtostrf
+                  */
+                  snprintf(strMessage, 160, "CURR temp: %sC\nWARN temp: %sC", strTemp, strWarnTemp);
+                  sendSMS(senderNumber, strMessage);
+  
+              } else if (currStr.startsWith("set temp")) {
+                  char command[20];
+                  currStr.toCharArray(command, 20);
+                  sscanf(command, "set temp %d", &warningTemp);
+                  // Сохраняем значение проговой температуры
+                  EEPROM.put(0, warningTemp);
+                  #ifdef DEBUG
+                  Serial.print("DEBUG: ");
+                  Serial.print("warningTemp: ");
+                  Serial.println(warningTemp);
+                  #endif
+              } else if (currStr.startsWith("set hyst")) {
+                  // sscanf не работает с float
+                  /*
+                  char command[20];
+                  currStr.toCharArray(command, 20);
+                  sscanf(command, "set hyst %d", &hysteresis);
+                  // Сохраняем значение проговой температуры
+                  EEPROM.put(0, warningTemp);
+                  #ifdef DEBUG
+                  Serial.print("warningTemp: ");
+                  Serial.println(warningTemp);
+                  #endif
+                  */
+              } else if (currStr.startsWith("reboot")) {                  
+                  wdt_enable(WDTO_15MS);
+                  while (1) { }                  
+              } else if (currStr.equalsIgnoreCase("balance") || currStr.equalsIgnoreCase("bl")) {
+                  char strResponse[50];
+                  if (sendUSSDSynchronous("*100#", strResponse)) {
+                    sendSMS(senderNumber, getSubString(strResponse, 0, strcspn(strResponse, "\r\n")));
+                  }
+              }
+              isStringMessage = false;
+          } else {
+              if (currStr.startsWith("+CMT")) {
+                  //если текущая строка начинается с "+CMT",
+                  //то следующая строка является сообщением
+                  isStringMessage = true;
+                  //экстрагируем номер отправителя
+                  currStr.substring(7,19).toCharArray(senderNumber, 13);
+                  #ifdef DEBUG
+                  Serial.print("DEBUG: ");
+                  Serial.println(senderNumber);
+                  #endif
+              }
+          }
+          currStr = "";
+      } else if ('\n' != currSymb) {
+          currStr += String(currSymb);
+      }
     }
+	wdt_reset();
 }
+
