@@ -4,7 +4,7 @@ SMS
 set temp 12
 */
 //#define DEBUG          1
-//#define SHOW_OW_TEMP 1
+//#define SHOW_OW_TEMP   1
 //#define WITHOUT_SIM900 1
 #define WITHOUT_LCD    1
 
@@ -421,7 +421,7 @@ void setup()
     waitWDogSIM900Tmout.setDelay(60000); //1 минута
     waitWDogSIM900Tmout.start();
 
-    waitHeartbeatTimeout.setDelay(1000*3600*24); //1 сутки
+    waitHeartbeatTimeout.setDelay(1000*3600*24UL); //1 сутки
     waitHeartbeatTimeout.start();
 
     #ifndef WITHOUT_LCD
@@ -621,6 +621,7 @@ void loop()
         error = 8;
       } else {
         #ifdef SHOW_OW_TEMP
+        Serial.print("DEBUG: ");
         Serial.println(currentTemperature);
         #endif
         if (currentTemperature < warningTemp) {
@@ -679,7 +680,7 @@ void loop()
       snprintf здесь урезанная, и не умеет работать с double
       поэтому используем dtostrf
       */
-      snprintf(strMessage, 160, "CURR temp: %sC\nWARN temp: %sC", strTemp, strWarnTemp);
+      snprintf(strMessage, 160, "heartbeat\nCURR temp: %sC\nWARN temp: %sC", strTemp, strWarnTemp);
       sendSMS(senderNumber, strMessage);
       waitHeartbeatTimeout.start();
     }                      
