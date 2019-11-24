@@ -424,6 +424,12 @@ void setup()
     waitHeartbeatTimeout.setDelay(1000*3600*24UL); //1 сутки
     waitHeartbeatTimeout.start();
 
+    #ifdef DEBUG
+    Serial.print("DEBUG: ");
+    Serial.print("waitHeartbeatTimeout Delay: ");
+    Serial.println(waitHeartbeatTimeout.getDelay());
+    #endif  
+
     #ifndef WITHOUT_LCD
     waitDisplayUpdateTmout.setDelay(1000);
     waitDisplayUpdateTmout.start();
@@ -745,6 +751,17 @@ void loop()
                   Serial.print("warningTemp: ");
                   Serial.println(warningTemp);
                   #endif
+              } else if (currStr.equalsIgnoreCase("get info")) {
+                  #ifdef DEBUG
+                  Serial.print("DEBUG: ");
+                  Serial.print("seconds until info: ");
+                  Serial.println(waitHeartbeatTimeout.getSecondsUntilOver());
+                  #endif     
+                  #ifdef DEBUG
+                  Serial.print("DEBUG: ");
+                  Serial.print("heartbeat timeout delay: ");
+                  Serial.println(waitHeartbeatTimeout.getDelay());
+                  #endif                             
               } else if (currStr.startsWith("set hyst")) {
                   // sscanf не работает с float
                   /*
